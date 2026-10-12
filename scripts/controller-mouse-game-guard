@@ -15,12 +15,7 @@ STATE_DIR = RUNTIME_DIR / "controller-mouse-game-guard"
 TOKEN_DIR = STATE_DIR / "inhibitors"
 RESTORE_FILE = STATE_DIR / "restore-mapper"
 LOCK_FILE = STATE_DIR / "lock"
-CONTROLLER_NAME = os.environ.get(
-    "CONTROLLER_MOUSE_DEVICE_NAME",
-    "Microsoft X-Box 360 pad",
-)
 steam_units: set[str] = set()
-controller_fd: int | None = None
 
 
 def ensure_state_dir() -> None:
@@ -38,36 +33,6 @@ def run_systemctl(*args: str) -> subprocess.CompletedProcess:
 
 def mapper_is_active() -> bool:
     return run_systemctl("is-active", "--quiet", MAPPER_UNIT).returncode == 0
-
-
-def ensure_controller_hold() -> bool:
-    global controller_fd
-
-    if controller_fd is not None:
-        try:
-            while True:
-                if not os.read(controller_fd, 4096):
-                    raise OSError("controller disconnected")
-        except BlockingIOError:
-            return True
-        except OSError:
-            try:
-                os.close(controller_fd)
-            except OSError:
-                pass
-            controller_fd = None
-
-    for name_file in Path("/sys/class/input").glob("event*/device/name"):
-        try:
-            if name_file.read_text(encoding="utf-8").strip() != CONTROLLER_NAME:
-                continue
-            event_node = Path("/dev/input") / name_file.parents[1].name
-            controller_fd = os.open(event_node, os.O_RDONLY | os.O_NONBLOCK)
-            return True
-        except (FileNotFoundError, PermissionError, OSError):
-            continue
-
-    return False
 
 
 def read_process_markers() -> set[str]:
@@ -150,7 +115,6 @@ def reconcile_locked(force_process_scan: bool = False) -> set[str]:
 
     if sources:
         if mapper_is_active():
-            ensure_controller_hold()
             RESTORE_FILE.touch(mode=0o600, exist_ok=True)
             run_systemctl("stop", MAPPER_UNIT)
     elif RESTORE_FILE.exists():
@@ -204,7 +168,6 @@ def print_status() -> int:
 
 
 def monitor() -> int:
-    ensure_controller_hold()
     reconcile()
 
     try:
@@ -213,7 +176,6 @@ def monitor() -> int:
         from gi.repository import GLib
     except ImportError:
         while True:
-            ensure_controller_hold()
             reconcile()
             time.sleep(0.5)
 
@@ -255,7 +217,6 @@ def monitor() -> int:
     )
 
     def periodic_reconcile() -> bool:
-        ensure_controller_hold()
         reconcile()
         return True
 

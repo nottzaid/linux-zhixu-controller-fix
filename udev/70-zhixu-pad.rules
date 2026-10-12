@@ -1,0 +1,16 @@
+# ZhiXu pad posing as a wired Xbox 360 controller (045e:028e). Its firmware
+# swaps the left stick and D-pad, and it drops off USB ~350 ms after the host
+# stops polling it (xpad polls only while the node is open). zhixu-pad@.service
+# holds the node open and serves a corrected copy through uinput. Removing the
+# uaccess tag (added by 70-uaccess.rules, turned into an ACL by
+# 73-seat-late.rules) and the default world-readable js mode hides the real
+# nodes, so games see only that copy.
+# Applied on every non-remove event: a change event that lost the systemd tag
+# would stop the proxy through BindsTo=.
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*|js*", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="028e", ATTRS{manufacturer}=="ZhiXu", TAG-="uaccess", MODE="0660"
+ACTION!="remove", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="028e", ATTRS{manufacturer}=="ZhiXu", TAG+="systemd", ENV{SYSTEMD_WANTS}+="zhixu-pad@%k.service"
+
+# The proxy runs as a dynamic user in the input group and creates its copy
+# through uinput, which is root-only unless a package (ydotool, for one) opens
+# it to that group.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"

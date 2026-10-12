@@ -1,0 +1,15 @@
+# Started by 70-zhixu-pad.rules for the ZhiXu pad's event node.
+[Unit]
+Description=Serve the ZhiXu pad on /dev/input/%I with stick and D-pad unswapped
+BindsTo=dev-input-%i.device
+After=dev-input-%i.device
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/zhixu-pad-proxy /dev/input/%I
+# Opened by systemd before Python starts, so xpad starts polling at once.
+StandardInput=file:/dev/input/%I
+StandardOutput=journal
+DynamicUser=yes
+SupplementaryGroups=input
+PrivateNetwork=yes
+Restart=on-failure

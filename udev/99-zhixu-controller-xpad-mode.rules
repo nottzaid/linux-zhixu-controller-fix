@@ -1,3 +1,0 @@
-# If this multi-mode ZhiXu controller appears in HID/DragonRise mode,
-# ask systemd to re-authorize it so it can enumerate again as 045e:028e.
-ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0079", ATTR{idProduct}=="181c", ATTR{manufacturer}=="ZhiXu", TAG+="systemd", ENV{SYSTEMD_WANTS}+="zhixu-controller-ensure-xpad-mode.service"
