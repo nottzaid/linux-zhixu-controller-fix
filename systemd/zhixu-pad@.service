@@ -1,0 +1,14 @@
+# Started by 70-zhixu-pad.rules for the ZhiXu pad's event node. Holding the
+# node open makes xpad poll the pad; the reader never reads, and evdev drops
+# what its queue cannot hold without affecting other readers.
+[Unit]
+Description=Keep the ZhiXu pad on /dev/input/%I polled
+BindsTo=dev-input-%i.device
+After=dev-input-%i.device
+
+[Service]
+ExecStart=/usr/bin/sleep infinity
+StandardInput=file:/dev/input/%I
+StandardOutput=null
+DynamicUser=yes
+Restart=on-failure

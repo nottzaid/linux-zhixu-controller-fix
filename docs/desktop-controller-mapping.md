@@ -14,9 +14,8 @@ with it.
 The guard controls only `controller-mouse.service`. It never unloads `xpad`,
 unbinds USB, grabs the event device, or changes RT suppression.
 
-This clone can re-enumerate when AntiMicroX closes its final evdev reader. The
-monitor therefore keeps one non-exclusive, read-only descriptor open and drains
-only its own queue. Games continue reading the same real device.
+`zhixu-pad@.service` keeps the pad polled, so stopping AntiMicroX no longer
+drops it off USB.
 
 ## Desktop profile
 
@@ -34,13 +33,6 @@ only its own queue. Games continue reading the same real device.
 The tested SDL GUID is `030081b85e0400008e02000010010000`. Run
 `antimicrox --list` before installing on another revision; if its GUID differs,
 update both the profile and `controller-mouse.service`.
-
-The monitor finds the evdev node by name. Override it in the guard unit when
-needed:
-
-```ini
-Environment=CONTROLLER_MOUSE_DEVICE_NAME=Another Controller Name
-```
 
 ## How games acquire the guard
 
@@ -177,14 +169,6 @@ For an integrated launcher, inspect the same evidence during a real game:
 ```sh
 controller-mouse-game-guard --status
 pgrep -x antimicrox || true
-```
-
-The persistent monitor should also hold a real event node:
-
-```sh
-guard_pid=$(systemctl --user show controller-mouse-game-guard.service \
-  --property MainPID --value)
-readlink -f "/proc/$guard_pid"/fd/* | grep '/dev/input/event'
 ```
 
 ## Recover or remove

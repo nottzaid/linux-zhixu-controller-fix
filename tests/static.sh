@@ -11,6 +11,10 @@ trap 'rm -rf -- "$temporary"' EXIT HUP INT TERM
 for script in "$root"/scripts/*.sh "$root"/tools/*.sh; do
     sh -n "$script"
 done
+bash -n "$root/install.sh"
+udevadm verify --no-summary "$root"/udev/*.rules
+cp "$root/systemd/zhixu-pad@.service" "$temporary/zhixu-pad@event0.service"
+systemd-analyze verify "$temporary/zhixu-pad@event0.service"
 
 if grep -Eq '^(After|Wants)=.*systemd-udev-settle' "$unit"; then
     printf 'deprecated udev settle dependency returned\n' >&2
@@ -24,4 +28,4 @@ sed 's|/usr/local/sbin/zhixu-controller-ensure-xpad-mode|/usr/bin/true|' \
     "$unit" >"$temporary/zhixu-controller-ensure-xpad-mode.service"
 systemd-analyze verify "$temporary/zhixu-controller-ensure-xpad-mode.service"
 
-printf 'PASS build, scripts, event rule, and non-blocking boot unit\n'
+printf 'PASS build, scripts, udev rules, keepalive unit, and non-blocking boot unit\n'
