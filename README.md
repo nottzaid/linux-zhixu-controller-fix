@@ -41,8 +41,12 @@ one "Xbox 360 Controller".
 
 ## Limits
 
-- The left stick is digital: eight directions, always at full tilt. The
-  firmware sends nothing finer. If it ever does, the proxy stops swapping.
+- The pad has a D-pad mode, where the left stick sends only eight directions
+  at full tilt and the D-pad moves the stick. On the Fantech EOS Pro, pressing
+  Capture twice switches between that mode and the normal analog one
+  ([Fantech's FAQ](https://fantechworld.com/products/eos-pro-wgp15)). The
+  proxy undoes the swap in D-pad mode and stops swapping as soon as the stick
+  reports a partial tilt.
 - D-pad Left is unreliable: in some captures the pad never sent it.
 - Other switch positions give other USB identities, which this doesn't handle.
 
