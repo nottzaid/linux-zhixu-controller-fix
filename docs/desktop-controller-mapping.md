@@ -1,18 +1,17 @@
 # Desktop controller mapping without in-game interference
 
-On the tested laptop, one physical controller has two jobs: patched `xpad`
-provides the real gamepad, while AntiMicroX replaces a broken touchpad. The
+On the tested laptop, one physical controller has two jobs: the proxy
+provides the gamepad, while AntiMicroX replaces a broken touchpad. The
 desktop mapper must disappear inside games without taking the real controller
 with it.
 
 | Layer | Desktop | Guarded game |
 | --- | --- | --- |
-| Real `Microsoft X-Box 360 pad` through patched `xpad` | Present | Present |
+| `Microsoft X-Box 360 pad` served by the proxy | Present | Present |
 | AntiMicroX virtual keyboard and mouse | Present | Stopped |
-| Optional `zhixu_suppress_rt` | Unchanged | Unchanged |
 
-The guard controls only `controller-mouse.service`. It never unloads `xpad`,
-unbinds USB, grabs the event device, or changes RT suppression.
+The guard controls only `controller-mouse.service`. It never touches the
+proxy, `xpad`, or USB.
 
 `zhixu-pad@.service` keeps the pad polled, so stopping AntiMicroX no longer
 drops it off USB.
@@ -160,7 +159,7 @@ grep -E 'antimicrox .* Emulation|Microsoft X-Box 360 pad' \
   /proc/bus/input/devices
 ```
 
-The mapper should be inactive, its virtual devices absent, and the real
+The mapper should be inactive, its virtual devices absent, and the
 controller present. No new USB disconnect should appear merely because the
 mapper stopped. After ten seconds the prior mapper state should return.
 
@@ -195,4 +194,4 @@ systemctl --user daemon-reload
 ```
 
 Remove Lutris's `prefix_command` separately. This procedure does not touch the
-kernel patch, USB mode service, or RT suppression.
+proxy.

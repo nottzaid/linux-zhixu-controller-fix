@@ -1,0 +1,187 @@
+#!/usr/bin/python3
+"""Present the ZhiXu pad to games as an ordinary Xbox 360 pad.
+
+In Windows (XInput) mode the pad's firmware swaps two controls: the physical
+left stick arrives as the D-pad (HAT0X/HAT0Y, digital) and the physical D-pad
+as the left stick at full tilt (ABS_X/ABS_Y). This proxy reads the real event
+node, swaps the two back, passes everything else through, forwards rumble, and
+serves the result on a uinput device with the pad's own name and IDs. udev
+hides the real node from the seat user, so games see only this one.
+
+The stick stays digital: in this mode the firmware sends no analog stick
+values. If the stick axes ever report a partial tilt, the firmware is not
+swapping, and the proxy passes everything through until the pad is replugged.
+
+Holding the real node open also keeps xpad polling the pad, which otherwise
+drops off USB ~350 ms later; systemd opens it as stdin before this starts.
+
+Usage: zhixu-pad-proxy /dev/input/eventN
+"""
+
+import ctypes
+import errno
+import fcntl
+import select
+import sys
+
+import evdev
+from evdev import ecodes as e
+from evdev import ff
+
+FULL = 32767                   # stick deflection reported for a D-pad bit
+THRESHOLD = 16000              # a D-pad direction is pressed past this
+PARTIAL = range(2000, 30000)   # |value| only a real analog stick produces
+
+
+def _ioc(direction, nr, size):
+    return direction << 30 | size << 16 | ord("U") << 8 | nr
+
+
+# python-evdev's begin_upload/begin_erase never set request_id, so do the
+# uinput force-feedback handshake directly.
+UI_BEGIN_FF_UPLOAD = _ioc(3, 200, ctypes.sizeof(ff.UInputUpload))
+UI_END_FF_UPLOAD = _ioc(1, 201, ctypes.sizeof(ff.UInputUpload))
+UI_BEGIN_FF_ERASE = _ioc(3, 202, ctypes.sizeof(ff.UInputErase))
+UI_END_FF_ERASE = _ioc(1, 203, ctypes.sizeof(ff.UInputErase))
+
+
+def log(message):
+    print(message, file=sys.stderr, flush=True)
+
+
+def sign(value):
+    return (value > THRESHOLD) - (value < -THRESHOLD)
+
+
+class Proxy:
+    def __init__(self, path):
+        self.real = evdev.InputDevice(path)
+        caps = self.real.capabilities(absinfo=True)
+        caps.pop(e.EV_SYN, None)
+        self.keys = caps.get(e.EV_KEY, [])
+        self.axes = [code for code, _ in caps.get(e.EV_ABS, [])]
+        self.swapped = True
+        self.effects = {}       # virtual effect id -> real effect id
+        self.dropping = False
+        # Start the copy at the translated state, without fuzz: the real pad
+        # has filtered its noise already, and a second filter would swallow
+        # small changes such as xpad's resting -1 on ABS_Y becoming 0.
+        start = {code: value for etype, code, value in self.state() if etype == e.EV_ABS}
+        caps[e.EV_ABS] = [(code, absinfo._replace(value=start.get(code, absinfo.value), fuzz=0))
+                          for code, absinfo in caps.get(e.EV_ABS, [])]
+        info = self.real.info
+        self.virt = evdev.UInput(
+            caps, name=self.real.name, vendor=info.vendor, product=info.product,
+            version=info.version, bustype=info.bustype, phys="zhixu-pad-proxy",
+            max_effects=max(self.real.ff_effects_count, 1))
+
+    def translate(self, etype, code, value):
+        if etype != e.EV_ABS or not self.swapped:
+            return [(etype, code, value)]
+        if code in (e.ABS_X, e.ABS_Y) and abs(value) in PARTIAL:
+            self.swapped = False
+            log("stick axes report a partial tilt; firmware is not swapping, passing through")
+            return self.state()
+        if code == e.ABS_HAT0X:
+            return [(e.EV_ABS, e.ABS_X, value * FULL)]
+        if code == e.ABS_HAT0Y:
+            return [(e.EV_ABS, e.ABS_Y, value * FULL)]
+        if code == e.ABS_X:
+            return [(e.EV_ABS, e.ABS_HAT0X, sign(value))]
+        if code == e.ABS_Y:
+            return [(e.EV_ABS, e.ABS_HAT0Y, sign(value))]
+        return [(etype, code, value)]
+
+    def state(self):
+        """The real pad's whole current state, translated."""
+        active = set(self.real.active_keys())
+        events = [(e.EV_KEY, key, int(key in active)) for key in self.keys]
+        for code in self.axes:
+            events += self.translate(e.EV_ABS, code, self.real.absinfo(code).value)
+        return events
+
+    def emit(self, events):
+        for etype, code, value in events:
+            self.virt.write(etype, code, value)
+
+    def forward_input(self):
+        for event in self.real.read():
+            if event.type == e.EV_SYN:
+                if event.code == e.SYN_DROPPED:
+                    self.dropping = True    # resync at the next report
+                elif event.code == e.SYN_REPORT:
+                    if self.dropping:
+                        self.dropping = False
+                        self.emit(self.state())
+                    self.virt.syn()
+            elif not self.dropping and event.type in (e.EV_KEY, e.EV_ABS):
+                # Not EV_FF: the input core echoes the rumble this proxy plays
+                # back to every reader, and forwarding it would replay it forever.
+                self.emit(self.translate(event.type, event.code, event.value))
+
+    def upload(self, request_id):
+        request = ff.UInputUpload()
+        request.request_id = request_id
+        fcntl.ioctl(self.virt.fd, UI_BEGIN_FF_UPLOAD, request)
+        try:
+            effect = ff.Effect.from_buffer_copy(request.effect)
+            effect.id = self.effects.get(request.effect.id, -1)
+            self.effects[request.effect.id] = self.real.upload_effect(effect)
+            request.retval = 0
+        except OSError as error:
+            request.retval = -(error.errno or errno.EIO)
+            log(f"rumble upload failed: {error}")
+        fcntl.ioctl(self.virt.fd, UI_END_FF_UPLOAD, request)
+
+    def erase(self, request_id):
+        request = ff.UInputErase()
+        request.request_id = request_id
+        fcntl.ioctl(self.virt.fd, UI_BEGIN_FF_ERASE, request)
+        try:
+            real_id = self.effects.pop(request.effect_id, None)
+            if real_id is not None:
+                self.real.erase_effect(real_id)
+            request.retval = 0
+        except OSError as error:
+            request.retval = -(error.errno or errno.EIO)
+        fcntl.ioctl(self.virt.fd, UI_END_FF_ERASE, request)
+
+    def forward_feedback(self):
+        for event in self.virt.read():
+            if event.type == e.EV_UINPUT and event.code == e.UI_FF_UPLOAD:
+                self.upload(event.value)
+            elif event.type == e.EV_UINPUT and event.code == e.UI_FF_ERASE:
+                self.erase(event.value)
+            elif event.type == e.EV_FF and event.code == e.FF_GAIN:
+                self.real.write(e.EV_FF, e.FF_GAIN, event.value)
+            elif event.type == e.EV_FF and event.code in self.effects:
+                self.real.write(e.EV_FF, self.effects[event.code], event.value)
+
+    def run(self):
+        self.emit(self.state())
+        self.virt.syn()
+        log(f"serving {self.real.path} on {getattr(self.virt.device, 'path', 'a uinput device')}")
+        while True:
+            ready, _, _ = select.select([self.real.fd, self.virt.fd], [], [])
+            try:
+                if self.real.fd in ready:
+                    self.forward_input()
+                if self.virt.fd in ready:
+                    self.forward_feedback()
+            except BlockingIOError:
+                continue
+
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit(__doc__.rsplit("Usage: ", 1)[1].strip())
+    try:
+        Proxy(sys.argv[1]).run()
+    except OSError as error:
+        if error.errno == errno.ENODEV:     # unplugged
+            return 0
+        raise
+
+
+if __name__ == "__main__":
+    sys.exit(main())
